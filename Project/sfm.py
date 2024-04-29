@@ -15,6 +15,7 @@ from symforce.opt.noise_models import PseudoHuberNoiseModel
 from symforce.opt.noise_models import BarronNoiseModel
 import sym
 
+import csv
 
 
 """
@@ -24,6 +25,101 @@ FUNCTIONS THAT YOU NEED TO MODIFY
 """
 Functions for two-view reconstruction.
 """
+def write_csv(file, a):
+    with open(file, 'w', newline='') as csvfile:
+        fieldnames = ['x', 'y', 'z']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+        writer.writeheader()
+        for i in a:
+            writer.writerow({'x': i[0], 'y': i[1], 'z': i[2]})
+def KNN(pts, idx, k):
+    '''
+    Find k-nearest neighbors
+    param pts: list of points to search (including the target point)
+    param idx: index of point to find neighbors
+    param k: number of neighbors
+    return: returns a tuple of 2 lists: list of pts corresponding to k neighbors and list of indexes in pts 
+    '''
+
+    pi = pts[idx]
+    nbs = []
+    dist = []
+    for i in range(len(pts)):
+        dist.append([np.linalg.norm(pi-pts[i]),i])
+    dist = np.array(dist)
+
+    dist_sort = dist[dist[:,0].argsort()]
+
+    knn = dist_sort[1:k+1]
+    for nb in knn:
+        pt_idx = int(nb[1])
+        nbs.append(pts[pt_idx])
+    
+    return nbs, knn[:,1]
+
+def local_norm(pts):
+    p_ = np.mean(pts, axis=0)
+    k = len(pts)
+    M = np.zeros((len(p_), len(p_)))
+    for pt in pts:
+        M += (1/k)*np.outer((pt-p_),(pt-p_))
+    eigval, eigvec = np.linalg.eig(M)
+    n = eigvec[np.argmin(eigval)]
+    n/=np.linalg.norm(n)
+    return n, p_
+
+def project_outliers(pts, k):
+    b = pts.copy()
+    for i in range(len(b)):
+        q, idxs = KNN(b, i, k)
+        n, p_ = local_norm(q)
+        disp = np.dot((b[i]-p_), n)
+        b[i] -= n*disp
+        # for j in range(len(q)):
+        #     idx = int(idxs[j])
+        #     disp = np.dot((b[idx]-b[i]), n)
+        #     b[idx] -= n*disp
+    return b
+def avg_dist(pi,q):
+    '''
+    computes density of point and neighbors
+    param pi: point to find density at
+    param q: list of k-nearest neighbors
+    return density at point pi
+    '''
+    
+    sum_ = 0
+    for pt in q:
+        sum_+=np.linalg.norm(pt-pi)
+    return sum_/len(q)
+
+def p_outlier(pts, idx, k, thresh):
+    '''
+    computes local density of point pi to find probability of being an outlier
+    param pi: point to find local density at
+    param q: list of k-nearest neighbors
+    return outlier probability of point pi and if it is likely an outlier
+    '''
+    pi = pts[idx]
+    q, idxs = KNN(pts,idx,k)
+    di = avg_dist(pi,q)
+    # print("density: ", di)
+    sum_ = 0
+    for pt in q:
+        sum_+=np.e**(-np.linalg.norm(pt-pi)/di)
+    p = 1-sum_/len(q)
+    return p, p<thresh*di
+
+def remove_outliers(a, k=10, thresh=0.1):
+    a_ = []
+    for i in range(len(a)):
+        p, outlier = p_outlier(a,i,k, thresh)
+        if not outlier:
+            a_.append(a[i])
+    return np.array(a_)
+
+
 def apply_transform(R_inB_ofA, p_inB_ofA, p_inA):
     p_inB = np.row_stack([
         (R_inB_ofA @ p_inA_i + p_inB_ofA) for p_inA_i in p_inA
